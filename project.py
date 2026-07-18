@@ -5,25 +5,94 @@ import time
 import json
 from datetime import datetime, timezone
 import uuid
+import random
+import os
+from collections import defaultdict
 
 """
 The scope of the Project will only entail FTP, SSH, and Telnet. Nothing more, nothing less. 
 """
 
 HOST = "0.0.0.0"
+file_lock = threading.Lock()
 
-LOG_DICT = {}
+PORT_SCAN_WINDOW = 5      # sekondes
+PORT_SCAN_THRESHOLD = 2   # aantal UNIEKE poorte getref
 
-BANNERS = {
-    8021: b"220 (vsFTPd 3.0.3)\r\n",
-    8022: b"SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5\r\n",
-    8023: b"\r\nUbuntu 20.04 LTS\r\nlogin: ",
-    21: b"220 (vsFTPd 3.0.3)\r\n",
-    22: b"SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5\r\n",
-    23: b"\r\nUbuntu 20.04 LTS\r\nlogin: "
-} # The reason I am doing this is because I want to simulate a honeypot over weeks'
+# Hierdie hou tred met: { IP: { (poort, tydstempel), (poort, tydstempel) } }
+port_hits = defaultdict(set)
+port_lock = threading.Lock()
+
+
+ # The reason I am doing this is because I want to simulate a honeypot over weeks'
 # time, and Grabbers / Bots will not connect unless I send back a valid header.
 
+TELNET_BANNERS = [
+    b"\r\nUbuntu 18.04.6 LTS\r\nlogin: ",
+    b"\r\nUbuntu 20.04.5 LTS\r\nlogin: ",
+    b"\r\nDebian GNU/Linux 10 (buster)\r\nlogin: ",
+    b"\r\nDebian GNU/Linux 11 (bullseye)\r\nlogin: ",
+    b"\r\nBusyBox v1.31.1 (built-in shell)\r\nlogin: ",
+    b"\r\nOpenWrt 19.07.4\r\nlogin: ",
+    b"\r\nOpenWrt 21.02.3\r\nlogin: ",
+    b"\r\nCentOS Linux 7 (Core)\r\nlogin: ",
+    b"\r\nAlpine Linux 3.17\r\nlogin: ",
+]
+
+FTP_BANNERS = [
+    b"220 (vsFTPd 3.0.3)\r\n",
+    b"220 ProFTPD 1.3.6 Server (Debian)\r\n",
+    b"220 Pure-FTPd 1.0.49\r\n",
+    b"220 Microsoft FTP Service\r\n",
+    b"220 FileZilla Server 0.9.60 beta\r\n",
+]
+
+SSH_BANNERS = [
+    b"SSH-2.0-OpenSSH_7.6p1 Ubuntu-4ubuntu0.7\r\n",
+    b"SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5\r\n",
+    b"SSH-2.0-OpenSSH_8.4p1 Debian-5\r\n",
+    b"SSH-2.0-OpenSSH_9.0p1 Debian-1\r\n",
+    b"SSH-2.0-OpenSSH_7.4p1 RedHat-6\r\n",
+    b"SSH-2.0-dropbear_2019.78\r\n",
+    b"SSH-2.0-dropbear_2020.80\r\n",
+]
+
+def RandomBanner(port, attacker_ip):
+    random.seed(attacker_ip)  # consistent per attacker
+
+    if port in (23, 8023):
+        return random.choice(TELNET_BANNERS)
+
+    if port in (21, 8021):
+        return random.choice(FTP_BANNERS)
+
+    if port in (22, 8022):
+        return random.choice(SSH_BANNERS)
+
+    return b""  # fallback
+
+def check_port_scan(ip_address, target_port):
+    huidige_tyd = time.time()
+    is_skandeerder = False
+
+    with port_lock:
+        # 1. Voeg die huidige poort en tydstempel by vir hierdie IP
+        port_hits[ip_address].add((target_port, huidige_tyd))
+        
+        # 2. Maak skoon: Verwyder alle hits wat ouer as 5 sekondes is
+        geldige_hits = {
+            (poort, timestamp) for poort, timestamp in port_hits[ip_address]
+            if huidige_tyd - timestamp <= PORT_SCAN_WINDOW
+        }
+        port_hits[ip_address] = geldige_hits
+        
+        # 3. Tel hoeveel UNIEKE poorte in die laaste 5 sekondes getref is
+        unieke_poorte = {poort for poort, timestamp in geldige_hits}
+        
+        if len(unieke_poorte) >= PORT_SCAN_THRESHOLD:
+            is_skandeerder = True
+            
+    return is_skandeerder
 
 def EvaluateThreat(PayloadsReceived, Duration):
     # PayloadsReceived is die aantal items (len) in jou payloads_received lys
@@ -68,7 +137,6 @@ def GetProtocol(port):
         return "telnet"
 
 def HoneyPotListen(PORT, HOST):
-    global BANNERS;
     TIMEOUT = False;
     FTP_SOCKET = socket.socket(socket.AF_INET, type=socket.SOCK_STREAM)
     FTP_SOCKET.bind((HOST, PORT))
@@ -76,12 +144,21 @@ def HoneyPotListen(PORT, HOST):
     print(f"Listening... Host = {HOST} Port = {PORT}\n\n")
     while True:
         conn, addr = FTP_SOCKET.accept();ConnTime = time.time()
+        LOG_DICT = {}
         print(f"Attacker IP + Port is {addr[0]}:{addr[1]}")
-        try:
-            conn.send(bytes(BANNERS[PORT]))
-        except KeyError as e:
-            print("The port you have passed into the function is not a valid key in BANNERS")
         
+        client_ip = addr[0]
+        if check_port_scan(client_ip, PORT):
+            print(f"[ALERT] PORT SCAN DETECTED VAN {client_ip}! Getref poorte binne {PORT_SCAN_WINDOW}s.")
+        
+        try:
+            banner_used = RandomBanner(PORT, addr[0])
+            if banner_used:
+                conn.send(banner_used)
+        except Exception as e:
+            print(f"Kon nie banner stuur nie (Bot het dalk klaar gedisconnect): {e}")
+            conn.close()
+            continue
         # 1. Stel die 5-sekonde timeout op die konneksie VOOR die loop begin
         conn.settimeout(5.0)
         payloads_received = []
@@ -127,7 +204,7 @@ def HoneyPotListen(PORT, HOST):
                         conn.send(b"Protocol mismatch.\r\n")
                         conn.close()
                         break;
-                print(f"Received: {teks_payload}")
+                # print(f"Received: {teks_payload}")
 
                 ### Telnet
 
@@ -178,7 +255,7 @@ def HoneyPotListen(PORT, HOST):
         LOG_DICT["attacker_ip"] = addr[0];
         LOG_DICT["attacker_port"] = addr[1];
         LOG_DICT["target_port"] = PORT;
-        LOG_DICT["banner_sent"] = BANNERS[PORT].decode('utf-8', errors='ignore').strip()
+        LOG_DICT["banner_sent"] = banner_used.decode('utf-8', errors='ignore').strip()
         
         LOG_DICT["connection_metadata"] = dict(
             connection_id=str(uuid.uuid4()),
@@ -204,12 +281,15 @@ def HoneyPotListen(PORT, HOST):
 
         category, score, confidence = EvaluateThreat(len(payloads_received), int((EndTime - ConnTime) * 1000))
         LOG_DICT["threat"] = dict(category=category, score=score, confidence=confidence)
+        for item in LOG_DICT["payloads_received"]: print(f"Received: {item}")
         print(LOG_DICT)
         # Jy skakel dit eers om na 'n string, en dan gebruik jy .write()
-        with open("./logs/honeypot_logs.json", "a") as log_file:
-            skoon_teks = json.dumps(LOG_DICT)
-            log_file.write(skoon_teks + "\n")
-        payloads_received = []
+        os.makedirs("./logs", exist_ok=True)
+        with file_lock:
+            with open("./logs/honeypot_logs.json", "a") as log_file:
+                skoon_teks = json.dumps(LOG_DICT)
+                log_file.write(skoon_teks + "\n")
+            payloads_received = []
 
 
 def main():
