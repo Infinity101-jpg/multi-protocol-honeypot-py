@@ -287,8 +287,8 @@ def HoneyPotListen(PORT, HOST):
         os.makedirs("./logs", exist_ok=True)
         with file_lock:
             with open("./logs/honeypot_logs.json", "a") as log_file:
-                skoon_teks = json.dumps(LOG_DICT)
-                log_file.write(skoon_teks + "\n")
+                clean_text = json.dumps(LOG_DICT)
+                log_file.write(clean_text + "\n")
             payloads_received = []
 
 
