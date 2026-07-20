@@ -16,10 +16,10 @@ The scope of the Project will only entail FTP, SSH, and Telnet. Nothing more, no
 HOST = "0.0.0.0"
 file_lock = threading.Lock()
 
-PORT_SCAN_WINDOW = 5      # sekondes
-PORT_SCAN_THRESHOLD = 2   # aantal UNIEKE poorte getref
+PORT_SCAN_WINDOW = 5      # Seconds
+PORT_SCAN_THRESHOLD = 2   # Number of UNIQUE ports that are hit 
 
-# Hierdie hou tred met: { IP: { (poort, tydstempel), (poort, tydstempel) } }
+# This is in line with: { IP: { (port, timestamp), (port, timestamp) } }
 port_hits = defaultdict(set)
 port_lock = threading.Lock()
 
