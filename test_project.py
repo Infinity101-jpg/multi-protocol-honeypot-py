@@ -8,7 +8,7 @@ Compatible with pytest (no arguments allowed).
 import importlib
 import sys
 
-MODULE_NAME = "project"   # rename your honeypot file to project.py
+MODULE_NAME = "project"
 
 # Try importing the honeypot module
 try:
